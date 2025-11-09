@@ -1,92 +1,62 @@
-name: Matrix Build with Artifacts
+# This workflow demonstrates a matrix build strategy with artifact management.
+# It runs builds for multiple Python versions in parallel, and each job
+# uploads its own unique artifact.
 
+name: Python Matrix Build
+
+# Triggers the workflow on push events to the main branch
 on:
   push:
-    branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
+    branches:
+      - main
+  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
 jobs:
-  matrix-build:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ['3.9', '3.10', '3.11', '3.12']
-        node-version: [16, 18, 20]
-        exclude:
-          - python-version: '3.9'
-            node-version: 20
-          - python-version: '3.12'
-            node-version: 16
+  build:
+    # Job name includes the matrix variable for better readability in the UI
+    name: Build (Python ${{ matrix.python-version }})
     
+    # Run jobs on the latest Ubuntu runner
+    runs-on: ubuntu-latest
+    
+    # Define the matrix strategy
+    strategy:
+      fail-fast: false # Don't cancel other jobs if one fails
+      matrix:
+        python-version: ['3.9', '3.10', '3.11'] # Three different variants
+
     steps:
-      - name: Checkout repository
+      # Step 1: Check out the repository's code
+      - name: Check out code
         uses: actions/checkout@v4
-      
-      - name: matrix-beeda5a
-        run: |
-          echo "Building for Python ${{ matrix.python-version }} and Node ${{ matrix.node-version }}"
-          echo "Matrix job identifier: matrix-beeda5a"
-      
-      - name: Set up Python
-        uses: actions/setup-python@v4
+
+      # Step 2: Set up the specific Python version for this matrix job
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ matrix.node-version }}
-      
+
+      # Step 3: A step with the required identifier
+      - name: Run Matrix Step (matrix-beeda5a)
+        id: matrix-beeda5a # The required step identifier
+        run: |
+          echo "Running build for Python version: ${{ matrix.python-version }}"
+          python --version
+
+      # Step 4: Generate a unique build artifact
       - name: Generate build artifact
         run: |
-          mkdir -p build
-          echo "Build Information" > build/output.txt
-          echo "==================" >> build/output.txt
-          echo "Python Version: ${{ matrix.python-version }}" >> build/output.txt
-          echo "Node Version: ${{ matrix.node-version }}" >> build/output.txt
-          echo "Timestamp: $(date)" >> build/output.txt
-          echo "Runner OS: ${{ runner.os }}" >> build/output.txt
-          echo "Build Number: ${{ github.run_number }}" >> build/output.txt
-          
-          # Create a JSON artifact
-          cat > build/metadata.json << EOF
-          {
-            "python_version": "${{ matrix.python-version }}",
-            "node_version": "${{ matrix.node-version }}",
-            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "runner_os": "${{ runner.os }}",
-            "build_number": "${{ github.run_number }}"
-          }
-          EOF
-          
-          # Run Python to verify installation
-          python --version > build/python-info.txt
-          pip --version >> build/python-info.txt
-          
-          # Run Node to verify installation
-          node --version > build/node-info.txt
-          npm --version >> build/node-info.txt
-      
+          echo "This is the build artifact for Python ${{ matrix.python-version }}." > build_output.txt
+          echo "Generated on $(date)" >> build_output.txt
+
+      # Step 5: Upload the unique artifact for this matrix job
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: build-beeda5a-py${{ matrix.python-version }}-node${{ matrix.node-version }}
-          path: build/
+          # Name the artifact uniquely based on the matrix variable
+          name: build-beeda5a-python${{ matrix.python-version }}
+          # Path to the file(s) to upload
+          path: build_output.txt
+          # Retention days (optional, defaults to 90)
           retention-days: 7
-      
-      - name: Display artifact summary
-        run: |
-          echo "✅ Artifact uploaded: build-beeda5a-py${{ matrix.python-version }}-node${{ matrix.node-version }}"
-          echo "Files included:"
-          ls -lh build/
-
-  collect-artifacts:
-    needs: matrix-build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Summary
-        run: |
-          echo "🎉 All matrix builds completed successfully!"
-          echo "Total artifact configurations: 10"
