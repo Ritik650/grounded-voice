@@ -1,45 +1,180 @@
-name: Matrix Build with Artifact Management
+name: Matrix Build with Artifacts
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, master ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, master ]
+  workflow_dispatch:
 
 jobs:
-  build:
-    # Matrix strategy with 3 variants (Node.js versions)
+  matrix-build:
+    name: Build on ${{ matrix.os }} with Node ${{ matrix.node-version }}
+    runs-on: ${{ matrix.os }}
+    
     strategy:
       matrix:
-        node-version: [14, 16, 18]
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node-version: [18, 20]
+        include:
+          # Add an additional variant with specific configuration
+          - os: ubuntu-latest
+            node-version: 22
+            experimental: true
+      fail-fast: false
     
-    runs-on: ubuntu-latest
-
     steps:
-      # Step 1: Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      # Step 2: Step with required identifier
+      
       - name: matrix-beeda5a
-        run: echo "Building for Node version ${{ matrix.node-version }}"
-
-      # Step 3: Set up Node.js version
-      - name: Set up Node.js
+        run: |
+          echo "Building for ${{ matrix.os }} with Node.js ${{ matrix.node-version }}"
+          echo "Matrix configuration identifier: matrix-beeda5a"
+      
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
-
-      # Step 4: Generate unique build artifact
-      - name: Generate build artifact
+      
+      - name: Get system information
+        id: sysinfo
+        shell: bash
         run: |
-          echo "This is the build artifact for Node version ${{ matrix.node-version }}" > build_output_v${{ matrix.node-version }}.txt
-          echo "Timestamp: $(date)" >> build_output_v${{ matrix.node-version }}.txt
-          echo "System: $(uname -a)" >> build_output_v${{ matrix.node-version }}.txt
-
-      # Step 5: Upload artifact
-      - name: Upload artifact
+          echo "OS: ${{ matrix.os }}" > system-info.txt
+          echo "Node Version: ${{ matrix.node-version }}" >> system-info.txt
+          echo "Runner OS: $RUNNER_OS" >> system-info.txt
+          echo "Runner Arch: $RUNNER_ARCH" >> system-info.txt
+          echo "Build Timestamp: $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> system-info.txt
+          echo "GitHub SHA: ${{ github.sha }}" >> system-info.txt
+          cat system-info.txt
+      
+      - name: Create build artifact directory
+        shell: bash
+        run: mkdir -p build-output
+      
+      - name: Generate build metadata
+        shell: bash
+        run: |
+          cat > build-output/build-metadata.json << EOF
+          {
+            "matrix": {
+              "os": "${{ matrix.os }}",
+              "node_version": "${{ matrix.node-version }}",
+              "experimental": ${{ matrix.experimental || false }}
+            },
+            "build_info": {
+              "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+              "git_sha": "${{ github.sha }}",
+              "git_ref": "${{ github.ref }}",
+              "workflow_run_id": "${{ github.run_id }}",
+              "workflow_run_number": "${{ github.run_number }}"
+            },
+            "environment": {
+              "runner_os": "$RUNNER_OS",
+              "runner_arch": "$RUNNER_ARCH",
+              "node_path": "$(which node)"
+            }
+          }
+          EOF
+          cat build-output/build-metadata.json
+      
+      - name: Create sample application
+        shell: bash
+        run: |
+          cat > build-output/app.js << 'EOF'
+          // Sample application for matrix build
+          const os = require('os');
+          const process = require('process');
+          
+          console.log('=== Build Environment ===');
+          console.log('Platform:', process.platform);
+          console.log('Architecture:', process.arch);
+          console.log('Node Version:', process.version);
+          console.log('CPU Count:', os.cpus().length);
+          console.log('Total Memory:', (os.totalmem() / 1024 / 1024 / 1024).toFixed(2), 'GB');
+          console.log('========================');
+          EOF
+          
+          node build-output/app.js > build-output/execution-log.txt
+          cat build-output/execution-log.txt
+      
+      - name: Generate build report
+        shell: bash
+        run: |
+          echo "# Build Report" > build-output/BUILD_REPORT.md
+          echo "" >> build-output/BUILD_REPORT.md
+          echo "## Configuration" >> build-output/BUILD_REPORT.md
+          echo "- **OS**: ${{ matrix.os }}" >> build-output/BUILD_REPORT.md
+          echo "- **Node Version**: ${{ matrix.node-version }}" >> build-output/BUILD_REPORT.md
+          echo "- **Build Date**: $(date -u)" >> build-output/BUILD_REPORT.md
+          echo "" >> build-output/BUILD_REPORT.md
+          echo "## Build Status" >> build-output/BUILD_REPORT.md
+          echo "✅ Build completed successfully" >> build-output/BUILD_REPORT.md
+          echo "" >> build-output/BUILD_REPORT.md
+          echo "## Artifacts Generated" >> build-output/BUILD_REPORT.md
+          echo "- build-metadata.json" >> build-output/BUILD_REPORT.md
+          echo "- app.js" >> build-output/BUILD_REPORT.md
+          echo "- execution-log.txt" >> build-output/BUILD_REPORT.md
+          echo "- BUILD_REPORT.md" >> build-output/BUILD_REPORT.md
+          cat build-output/BUILD_REPORT.md
+      
+      - name: Create platform-specific artifact name
+        id: artifact-name
+        shell: bash
+        run: |
+          OS_SHORT=$(echo "${{ matrix.os }}" | cut -d'-' -f1)
+          ARTIFACT_NAME="build-beeda5a-${OS_SHORT}-node${{ matrix.node-version }}"
+          echo "name=${ARTIFACT_NAME}" >> $GITHUB_OUTPUT
+          echo "Artifact name: ${ARTIFACT_NAME}"
+      
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: build-beeda5a-v${{ matrix.node-version }}
-          path: build_output_v${{ matrix.node-version }}.txt
+          name: ${{ steps.artifact-name.outputs.name }}
+          path: build-output/
+          retention-days: 30
+          if-no-files-found: error
+      
+      - name: Build summary
+        shell: bash
+        run: |
+          echo "### ✅ Build Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Configuration:**" >> $GITHUB_STEP_SUMMARY
+          echo "- OS: ${{ matrix.os }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Node: ${{ matrix.node-version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Artifact: ${{ steps.artifact-name.outputs.name }}" >> $GITHUB_STEP_SUMMARY
+  
+  collect-artifacts:
+    name: Collect and Verify Artifacts
+    needs: matrix-build
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-artifacts
+      
+      - name: List all artifacts
+        run: |
+          echo "=== Downloaded Artifacts ==="
+          ls -lR all-artifacts/
+          echo ""
+          echo "=== Artifact Count ==="
+          find all-artifacts -name "build-beeda5a-*" -type d | wc -l
+      
+      - name: Verify artifacts
+        run: |
+          echo "### 📦 Artifact Verification" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          for artifact in all-artifacts/build-beeda5a-*; do
+            if [ -d "$artifact" ]; then
+              echo "**$(basename $artifact)**" >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              cat "$artifact/BUILD_REPORT.md" >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+            fi
+          done
