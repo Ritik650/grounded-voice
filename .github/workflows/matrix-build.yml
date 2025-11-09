@@ -1,62 +1,58 @@
-# This workflow demonstrates a matrix build strategy with artifact management.
-# It runs builds for multiple Python versions in parallel, and each job
-# uploads its own unique artifact.
+name: Matrix Build with Artifacts (beeda5a)
 
-name: Python Matrix Build
-
-# Triggers the workflow on push events to the main branch
 on:
   push:
-    branches:
-      - main
-  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
 jobs:
   build:
-    # Job name includes the matrix variable for better readability in the UI
-    name: Build (Python ${{ matrix.python-version }})
-    
-    # Run jobs on the latest Ubuntu runner
-    runs-on: ubuntu-latest
-    
-    # Define the matrix strategy
+    # 3 OSes x 2 Python versions = 6 parallel jobs
     strategy:
-      fail-fast: false # Don't cancel other jobs if one fails
+      fail-fast: false
       matrix:
-        python-version: ['3.9', '3.10', '3.11'] # Three different variants
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ['3.9', '3.11']
+
+    runs-on: ${{ matrix.os }}
 
     steps:
-      # Step 1: Check out the repository's code
-      - name: Check out code
+      - name: Checkout
         uses: actions/checkout@v4
 
-      # Step 2: Set up the specific Python version for this matrix job
-      - name: Set up Python ${{ matrix.python-version }}
+      - name: Setup Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
 
-      # Step 3: A step with the required identifier
-      - name: Run Matrix Step (matrix-beeda5a)
-        id: matrix-beeda5a # The required step identifier
+      # ---- Required step identifier ----
+      - name: matrix-beeda5a
+        shell: bash
         run: |
-          echo "Running build for Python version: ${{ matrix.python-version }}"
-          python --version
+          echo "Building for OS=${{ matrix.os }} PY=${{ matrix.python-version }}"
 
-      # Step 4: Generate a unique build artifact
+      # Generate a unique, non-empty artifact for each variant
       - name: Generate build artifact
+        shell: bash
         run: |
-          echo "This is the build artifact for Python ${{ matrix.python-version }}." > build_output.txt
-          echo "Generated on $(date)" >> build_output.txt
+          python - <<'PY'
+          import os, platform, datetime, json, pathlib
+          payload = {
+              "runner_os": os.getenv("RUNNER_OS"),
+              "matrix_os": "${{ matrix.os }}",
+              "python": "${{ matrix.python-version }}",
+              "timestamp_utc": datetime.datetime.utcnow().isoformat()+"Z",
+              "commit": os.getenv("GITHUB_SHA"),
+              "note": "Matrix artifact for beeda5a validation"
+          }
+          out = pathlib.Path(f"output-${{ matrix.os }}-py${{ matrix.python-version }}.json")
+          out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+          print("Wrote", out)
+          PY
 
-      # Step 5: Upload the unique artifact for this matrix job
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          # Name the artifact uniquely based on the matrix variable
-          name: build-beeda5a-python${{ matrix.python-version }}
-          # Path to the file(s) to upload
-          path: build_output.txt
-          # Retention days (optional, defaults to 90)
-          retention-days: 7
+          # ---- Required prefix ----
+          name: build-beeda5a-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: output-${{ matrix.os }}-py${{ matrix.python-version }}.json
+          if-no-files-found: error
