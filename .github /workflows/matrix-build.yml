@@ -1,42 +1,45 @@
-name: Multi-Platform Matrix Build (25376c2)
+name: Matrix Build with Artifact Management
 
 on:
   push:
     branches: [ main ]
   pull_request:
+    branches: [ main ]
 
 jobs:
   build:
-    name: Build for ${{ matrix.python-version }} on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-
+    # Matrix strategy with 3 variants (Node.js versions)
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ['3.9', '3.10', '3.11']
-      fail-fast: false
+        node-version: [14, 16, 18]
+    
+    runs-on: ubuntu-latest
 
     steps:
+      # Step 1: Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+      # Step 2: Step with required identifier
+      - name: matrix-beeda5a
+        run: echo "Building for Node version ${{ matrix.node-version }}"
+
+      # Step 3: Set up Node.js version
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          python-version: ${{ matrix.python-version }}
+          node-version: ${{ matrix.node-version }}
 
-      - name: matrix-25376c2
-        run: echo "Building for OS=${{ matrix.os }} with Python=${{ matrix.python-version }}"
-
+      # Step 4: Generate unique build artifact
       - name: Generate build artifact
         run: |
-          echo "Build output for OS=${{ matrix.os }}, Python=${{ matrix.python-version }}" > build-info.txt
-          echo "Timestamp: $(date)" >> build-info.txt
-          echo "Workflow run ID: ${{ github.run_id }}" >> build-info.txt
-          echo "Artifact generated successfully!" >> build-info.txt
+          echo "This is the build artifact for Node version ${{ matrix.node-version }}" > build_output_v${{ matrix.node-version }}.txt
+          echo "Timestamp: $(date)" >> build_output_v${{ matrix.node-version }}.txt
+          echo "System: $(uname -a)" >> build_output_v${{ matrix.node-version }}.txt
 
+      # Step 5: Upload artifact
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: build-25376c2-${{ matrix.os }}-py${{ matrix.python-version }}
-          path: build-info.txt
+          name: build-beeda5a-v${{ matrix.node-version }}
+          path: build_output_v${{ matrix.node-version }}.txt
