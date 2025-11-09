@@ -1,4 +1,4 @@
-name: Multi-Platform Matrix Build (25376c2)
+name: Multi-Platform Matrix Build (beeda5a)
 
 on:
   push:
@@ -25,7 +25,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: matrix-25376c2
+      - name: matrix-beeda5a
         run: echo "Building for OS=${{ matrix.os }} with Python=${{ matrix.python-version }}"
 
       - name: Generate build artifact
