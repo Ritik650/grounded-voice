@@ -1,41 +1,92 @@
-name: Simple Matrix Build
+name: Matrix Build with Artifacts
 
 on:
   push:
     branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
-  build:
-    runs-on: ${{ matrix.os }}
+  matrix-build:
+    runs-on: ubuntu-latest
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        include:
-          - os: ubuntu-latest
-            variant: linux
-          - os: macos-latest
-            variant: darwin
-          - os: windows-latest
-            variant: win
+        python-version: ['3.9', '3.10', '3.11', '3.12']
+        node-version: [16, 18, 20]
+        exclude:
+          - python-version: '3.9'
+            node-version: 20
+          - python-version: '3.12'
+            node-version: 16
     
     steps:
-      - name: Checkout code
+      - name: Checkout repository
         uses: actions/checkout@v4
       
       - name: matrix-beeda5a
-        run: echo "Building on ${{ matrix.os }} - variant ${{ matrix.variant }}"
+        run: |
+          echo "Building for Python ${{ matrix.python-version }} and Node ${{ matrix.node-version }}"
+          echo "Matrix job identifier: matrix-beeda5a"
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
       
       - name: Generate build artifact
-        shell: bash
         run: |
           mkdir -p build
-          echo "Build completed on ${{ matrix.os }}" > build/result.txt
-          echo "Variant: ${{ matrix.variant }}" >> build/result.txt
-          echo "Timestamp: $(date)" >> build/result.txt
+          echo "Build Information" > build/output.txt
+          echo "==================" >> build/output.txt
+          echo "Python Version: ${{ matrix.python-version }}" >> build/output.txt
+          echo "Node Version: ${{ matrix.node-version }}" >> build/output.txt
+          echo "Timestamp: $(date)" >> build/output.txt
+          echo "Runner OS: ${{ runner.os }}" >> build/output.txt
+          echo "Build Number: ${{ github.run_number }}" >> build/output.txt
+          
+          # Create a JSON artifact
+          cat > build/metadata.json << EOF
+          {
+            "python_version": "${{ matrix.python-version }}",
+            "node_version": "${{ matrix.node-version }}",
+            "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "runner_os": "${{ runner.os }}",
+            "build_number": "${{ github.run_number }}"
+          }
+          EOF
+          
+          # Run Python to verify installation
+          python --version > build/python-info.txt
+          pip --version >> build/python-info.txt
+          
+          # Run Node to verify installation
+          node --version > build/node-info.txt
+          npm --version >> build/node-info.txt
       
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: build-beeda5a-${{ matrix.variant }}
+          name: build-beeda5a-py${{ matrix.python-version }}-node${{ matrix.node-version }}
           path: build/
+          retention-days: 7
+      
+      - name: Display artifact summary
+        run: |
+          echo "✅ Artifact uploaded: build-beeda5a-py${{ matrix.python-version }}-node${{ matrix.node-version }}"
+          echo "Files included:"
+          ls -lh build/
+
+  collect-artifacts:
+    needs: matrix-build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Summary
+        run: |
+          echo "🎉 All matrix builds completed successfully!"
+          echo "Total artifact configurations: 10"
