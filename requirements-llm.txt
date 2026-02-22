@@ -1,0 +1,4 @@
+# Optional: hosted LLM backend (LLM_BACKEND=gemini).
+# The default "extractive" backend needs none of this -- see app/llm.py.
+# Note: google-genai supersedes the older, now-deprecated google-generativeai package.
+google-genai==1.51.0

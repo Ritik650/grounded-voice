@@ -1,0 +1,31 @@
+# Core service
+fastapi==0.121.2
+uvicorn[standard]==0.40.0
+websockets==15.0.1
+python-multipart==0.0.20
+pydantic-settings==2.13.0
+
+# Speech: ASR + TTS + VAD.
+# Deliberately torch-free -- every model below runs on CTranslate2 or ONNX Runtime.
+# See README "Deviations from the plan" for why.
+faster-whisper==1.2.1
+onnxruntime==1.28.0
+piper-tts==1.6.0
+
+# Audio I/O and resampling (librosa/numba intentionally avoided: too heavy for a
+# latency-sensitive service, and we only need read + resample)
+numpy==2.3.4
+soundfile==0.13.1
+soxr==1.0.0
+
+# Retrieval
+qdrant-client==1.19.0
+fastembed==0.8.0
+
+# Evaluation
+jiwer==4.0.0
+
+# Tests
+pytest==8.4.2
+pytest-asyncio==1.3.0
+httpx==0.28.1

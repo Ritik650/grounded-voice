@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Model weights and datasets: fetched by scripts/download_models.py and eval/wer_eval.py
+models/
+data/eval/
+data/samples/*.wav
+data/tmp/
+eval/results/
+
+.env
+*.log
+.DS_Store
+.idea/
+.vscode/
