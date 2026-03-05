@@ -78,6 +78,87 @@ def test_stream_sentences_groups_tokens_into_sentences(monkeypatch):
     llm.get_llm.cache_clear()
 
 
+class _Boom:
+    """A backend that fails the way a rate-limited hosted API fails."""
+
+    name = "boom"
+
+    def __init__(self, code=429, after_tokens=0):
+        self.code = code
+        self.after_tokens = after_tokens
+
+    def stream(self, question, context):
+        for i in range(self.after_tokens):
+            yield f"token{i} "
+        raise RuntimeError(f"{self.code} RESOURCE_EXHAUSTED: quota exceeded")
+
+    def complete(self, question, context):
+        return "".join(self.stream(question, context))
+
+
+def test_rate_limited_backend_falls_back_to_extractive(monkeypatch, caplog):
+    """A 429 must degrade the turn, not kill the session."""
+    monkeypatch.setitem(llm.BACKENDS, "boom", _Boom)
+    llm.get_llm.cache_clear()
+
+    with caplog.at_level("WARNING"):
+        sentences = list(llm.stream_sentences("gigabit plan cost", CONTEXT, backend="boom"))
+
+    assert sentences, "no fallback answer produced"
+    assert "eighty dollars" in " ".join(sentences)
+    assert "rate limited (429)" in caplog.text
+    llm.get_llm.cache_clear()
+
+
+def test_network_error_falls_back_to_extractive(monkeypatch):
+    class Offline(_Boom):
+        def stream(self, question, context):
+            raise ConnectionError("getaddrinfo failed")
+            yield  # pragma: no cover - generator marker
+
+    monkeypatch.setitem(llm.BACKENDS, "offline", Offline)
+    llm.get_llm.cache_clear()
+
+    assert "eighty dollars" in llm.answer("gigabit plan cost", CONTEXT, backend="offline")
+    llm.get_llm.cache_clear()
+
+
+def test_failure_after_speaking_starts_does_not_restart_the_answer(monkeypatch):
+    """Once audio is playing, a substituted answer would contradict what was said."""
+    monkeypatch.setitem(llm.BACKENDS, "midfail", lambda: _Boom(after_tokens=3))
+    llm.get_llm.cache_clear()
+
+    sentences = list(llm.stream_sentences("gigabit plan cost", CONTEXT, backend="midfail"))
+
+    assert "eighty dollars" not in " ".join(sentences)
+    assert "token0" in " ".join(sentences)
+    llm.get_llm.cache_clear()
+
+
+def test_extractive_failures_are_not_swallowed(monkeypatch):
+    """The fallback must not mask a genuine bug in the fallback itself."""
+    monkeypatch.setattr(
+        llm.ExtractiveBackend, "complete", lambda *a, **k: (_ for _ in ()).throw(ValueError("bug"))
+    )
+    llm.get_llm.cache_clear()
+    try:
+        llm.answer("q", CONTEXT, backend="extractive")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected the extractive error to propagate")
+    llm.get_llm.cache_clear()
+
+
+def test_status_code_extraction():
+    class Err(Exception):
+        code = 429
+
+    assert llm._status_code(Err()) == 429
+    assert llm._is_bad_request(Exception("400 INVALID_ARGUMENT thinking_budget"))
+    assert not llm._is_bad_request(Exception("429 RESOURCE_EXHAUSTED"))
+
+
 def test_unknown_backend_is_rejected():
     llm.get_llm.cache_clear()
     try:

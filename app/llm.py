@@ -214,6 +214,19 @@ class ExtractiveBackend:
 
 
 class GeminiBackend:
+    """Hosted Gemini Flash, streamed token by token.
+
+    Two things matter for a voice loop and neither is the default:
+
+    * **Thinking is off.** Gemini 3.x reasons before answering unless told not to,
+      which measured 2390 ms to first token on 3.5-flash versus 850 ms with
+      `thinking_budget=0`. For one-sentence answers read straight out of retrieved
+      context there is nothing to reason about, so it is pure added silence.
+    * **Tokens are yielded as they arrive**, never accumulated. `stream_sentences`
+      turns them into whole sentences and TTS starts on the first one, so the rest of
+      generation overlaps with speech instead of preceding it.
+    """
+
     name = "gemini"
 
     def __init__(self):
@@ -226,13 +239,47 @@ class GeminiBackend:
             ) from exc
         if not settings.gemini_api_key:
             raise RuntimeError("GEMINI_API_KEY is not set (LLM_BACKEND=gemini).")
+
         self._client = genai.Client(api_key=settings.gemini_api_key)
+        self.model = settings.gemini_model
+        self._config = self._build_config()
+
+    def _build_config(self):
+        if settings.gemini_thinking_budget < 0:
+            return None
+        from google.genai import types
+
+        return types.GenerateContentConfig(
+            thinking_config=types.ThinkingConfig(thinking_budget=settings.gemini_thinking_budget)
+        )
 
     def stream(self, question: str, context: str) -> Iterator[str]:
-        stream = self._client.models.generate_content_stream(
-            model=settings.gemini_model, contents=build_prompt(question, context)
-        )
-        for event in stream:
+        prompt = build_prompt(question, context)
+        emitted = False
+        try:
+            for token in self._generate(prompt, self._config):
+                emitted = True
+                yield token
+        except Exception as exc:
+            # Not every Flash model accepts a thinking budget -- 3.6-flash and
+            # 3.5-flash-lite reject it with a 400. Drop it once, permanently for this
+            # process, rather than failing every turn or paying a probe request each
+            # time. Only safe before any token was emitted; retrying mid-stream would
+            # speak the first half of the answer twice.
+            if emitted or self._config is None or not _is_bad_request(exc):
+                raise
+            log.info(
+                "Model %s rejected thinking_budget (%s); retrying without it.",
+                self.model,
+                _brief(exc),
+            )
+            self._config = None
+            yield from self._generate(prompt, None)
+
+    def _generate(self, prompt: str, config) -> Iterator[str]:
+        for event in self._client.models.generate_content_stream(
+            model=self.model, contents=prompt, config=config
+        ):
             if event.text:
                 yield event.text
 
@@ -294,7 +341,41 @@ def get_llm(backend: str | None = None):
 
 
 def answer(question: str, context: str, backend: str | None = None) -> str:
-    return speakable(get_llm(backend).complete(question, context))
+    llm = get_llm(backend)
+    try:
+        return speakable(llm.complete(question, context))
+    except Exception as exc:
+        if isinstance(llm, ExtractiveBackend):
+            raise
+        log.warning("%s", _fallback_reason(llm, exc))
+        return speakable(ExtractiveBackend().complete(question, context))
+
+
+def _iter_tokens(llm, question: str, context: str) -> Iterator[str]:
+    """Token stream with a per-turn safety net.
+
+    Free-tier Gemini has a low requests-per-minute ceiling, so a 429 mid-conversation
+    is an expected event, not an exceptional one -- and a voice session that drops its
+    WebSocket because the quota ticked over is worse than one that answers slightly
+    less fluently. A failed turn degrades to grounded extraction instead.
+
+    The fallback only applies before the first token. Once part of an answer has been
+    spoken aloud, substituting a different answer would have the assistant contradict
+    itself mid-sentence; better to end the turn and let the user ask again.
+    """
+    emitted = False
+    try:
+        for token in llm.stream(question, context):
+            emitted = True
+            yield token
+    except Exception as exc:
+        if isinstance(llm, ExtractiveBackend):
+            raise
+        if emitted:
+            log.warning("%s -- reply truncated (already speaking)", _fallback_reason(llm, exc))
+            return
+        log.warning("%s", _fallback_reason(llm, exc))
+        yield ExtractiveBackend().complete(question, context)
 
 
 def stream_sentences(question: str, context: str, backend: str | None = None) -> Iterator[str]:
@@ -306,7 +387,7 @@ def stream_sentences(question: str, context: str, backend: str | None = None) ->
     natural, and they arrive fast enough to keep the latency win.
     """
     buffer = ""
-    for token in get_llm(backend).stream(question, context):
+    for token in _iter_tokens(get_llm(backend), question, context):
         buffer += token
         while True:
             match = _SENTENCE_END.search(buffer)
@@ -319,6 +400,42 @@ def stream_sentences(question: str, context: str, backend: str | None = None) ->
     tail = speakable(buffer)
     if tail:
         yield tail
+
+
+def _status_code(exc: Exception) -> int | None:
+    """HTTP status from a google-genai / httpx error, whatever shape it arrives in."""
+    for attr in ("code", "status_code"):
+        value = getattr(exc, attr, None)
+        if isinstance(value, int):
+            return value
+    response = getattr(exc, "response", None)
+    return getattr(response, "status_code", None)
+
+
+def _is_bad_request(exc: Exception) -> bool:
+    return _status_code(exc) == 400 or "INVALID_ARGUMENT" in str(exc)
+
+
+def _fallback_reason(llm, exc: Exception) -> str:
+    """Human-readable log line, naming rate limits explicitly.
+
+    A 429 on the free tier is the single most likely failure in a live voice loop and
+    means something the operator can act on (slow down, or add billing), so it should
+    not read like a generic crash in the logs.
+    """
+    code = _status_code(exc)
+    if code == 429 or "RESOURCE_EXHAUSTED" in str(exc):
+        cause = "rate limited (429) -- free-tier requests-per-minute quota"
+    elif code is not None:
+        cause = f"HTTP {code}"
+    else:
+        cause = f"{type(exc).__name__}: {_brief(exc)}"
+    return f"LLM backend {llm.name!r} {cause}; falling back to extractive for this turn"
+
+
+def _brief(exc: Exception, limit: int = 160) -> str:
+    text = " ".join(str(exc).split())
+    return text[:limit] + ("..." if len(text) > limit else "")
 
 
 def speakable(text: str) -> str:

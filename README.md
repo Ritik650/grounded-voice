@@ -219,9 +219,44 @@ paraphrase, combine two facts, or answer anything the KB does not state almost l
 Its failure mode is lexical. Asked *"what are your support hours"* it answers
 *"Emergency outage support runs 24 hours a day"*, because that sentence contains both
 "support" and "hours" while the correct one ("Phone and chat support run from 7 a.m. to
-11 p.m.") contains neither word in the queried form. Set `LLM_BACKEND=gemini` (plus
-`pip install -r requirements-llm.txt` and a key) or `ollama` for real answer quality;
-the pipeline, streaming, and grounding are identical.
+11 p.m.") contains neither word in the queried form.
+
+**`gemini` fixes exactly that.** Same question, same retrieved context, live:
+
+> Phone and chat support are available from seven a.m. to eleven p.m. local time, seven
+> days a week, and emergency outage support is available twenty-four hours a day.
+
+It also still refuses out-of-KB questions ("I do not have that information"), so
+grounding survives the upgrade. Setup:
+
+```bash
+pip install -r requirements-llm.txt
+echo "LLM_BACKEND=gemini"      >> .env
+echo "GEMINI_API_KEY=your-key" >> .env      # .env is gitignored
+```
+
+Two things about Gemini that cost real latency and are handled in code:
+
+- **Model naming moved on.** `gemini-2.0-flash` is shut down, and `gemini-2.5-flash`
+  now returns 404 for new keys — *"no longer available to new users"*. The default is
+  `gemini-3.5-flash-lite`; `GEMINI_MODEL` changes it without touching code.
+- **Thinking is on by default and doubles latency.** Measured time-to-first-token on
+  the free tier: `gemini-3.5-flash` 2390 ms with thinking, **850 ms** with
+  `thinking_budget=0`; `gemini-3.5-flash-lite` **730 ms**; `gemini-3.6-flash` 2860 ms.
+  There is nothing to reason about when reading one sentence out of retrieved context,
+  so `GEMINI_THINKING_BUDGET` defaults to 0. Models that reject the parameter
+  (3.6-flash, 3.5-flash-lite) are detected on first use and retried without it, once
+  per process.
+
+Free-tier Gemini has a low requests-per-minute ceiling, so **a 429 mid-conversation is
+expected, not exceptional**. Any hosted-backend failure — rate limit, DNS, timeout —
+degrades that single turn to the extractive backend and logs why; the WebSocket session
+survives. If tokens were already being spoken when the failure hit, the turn is
+truncated rather than restarted, because substituting a different answer would have the
+assistant contradict itself mid-sentence.
+
+Budget roughly **+0.7–0.9 s** on top of the ~1 s local pipeline when using Gemini. The
+hosted call is then the largest single stage.
 
 ---
 

@@ -78,6 +78,25 @@ class VoiceAssistant:
     def warmup(self) -> None:
         self.asr.transcribe(np.zeros(settings.sample_rate // 2, dtype=np.float32))
         self.tts.warmup()
+        self._warmup_llm()
+
+    def _warmup_llm(self) -> None:
+        """Open the TLS connection and settle the thinking-budget question up front.
+
+        A hosted backend otherwise spends the user's first turn on a TLS handshake and,
+        for models that reject `thinking_budget`, one rejected request before the retry
+        succeeds. Costs a single API call at boot; on the free tier that is one request
+        out of the per-minute quota, spent where nobody is waiting.
+        """
+        if self.llm_backend == "extractive":
+            return
+        try:
+            start = time.perf_counter()
+            llm.answer("ping", "", backend=self.llm_backend)
+            log.info("LLM warmup (%s) took %.2fs", self.llm_backend, time.perf_counter() - start)
+        except Exception as exc:
+            # Never block startup on a remote service. Turns fall back to extractive.
+            log.warning("LLM warmup failed for %r: %s", self.llm_backend, exc)
 
     # -- stages ---------------------------------------------------------------
 

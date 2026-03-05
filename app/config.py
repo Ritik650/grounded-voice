@@ -48,8 +48,23 @@ class Settings(BaseSettings):
     # "extractive" needs no API key and no network -- it is the default so the
     # pipeline, the tests and CI all run out of the box.
     llm_backend: str = "extractive"  # extractive | gemini | ollama
+
+    # Never hardcode the key; it comes from the environment or the gitignored .env.
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.5-flash"
+    # Checked against the live API in Aug 2026: gemini-2.0-flash is shut down and
+    # gemini-2.5-flash now 404s for new keys ("no longer available to new users"),
+    # so neither works as a default any more. Measured time-to-first-token on this
+    # free-tier key, median of 3: 3.5-flash-lite 730 ms, 3.5-flash 850 ms (thinking
+    # off) / 2390 ms (on), 3.6-flash 2860 ms. Lite wins on latency, which is what a
+    # voice loop is bottlenecked on; set GEMINI_MODEL=gemini-3.5-flash for better
+    # reasoning at roughly +120 ms.
+    gemini_model: str = "gemini-3.5-flash-lite"
+    # 0 disables "thinking", which more than halves latency on the models that
+    # support the switch and is the single biggest lever here. -1 leaves the model
+    # default alone. 3.6-flash and 3.5-flash-lite reject the parameter outright, so
+    # it is dropped automatically on first use -- see GeminiBackend.stream.
+    gemini_thinking_budget: int = 0
+
     ollama_host: str = "http://localhost:11434"
     ollama_model: str = "llama3.2:1b"
     llm_max_words: int = 60  # long replies destroy perceived latency via TTS
