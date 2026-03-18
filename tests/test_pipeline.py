@@ -68,7 +68,7 @@ def test_streaming_speaks_sentence_one_while_the_llm_is_still_writing(assistant,
     class SlowStreamingBackend:
         name = "slow"
 
-        def stream(self, question, context):
+        def stream(self, question, context, history=None):
             for sentence in (
                 "Support runs from seven to eleven. ",
                 "Outage cover is always on. ",
@@ -77,7 +77,7 @@ def test_streaming_speaks_sentence_one_while_the_llm_is_still_writing(assistant,
                 yield sentence
                 _time.sleep(gap_s)
 
-        def complete(self, question, context):
+        def complete(self, question, context, history=None):
             return "".join(self.stream(question, context))
 
     monkeypatch.setitem(llm.BACKENDS, "slow", SlowStreamingBackend)

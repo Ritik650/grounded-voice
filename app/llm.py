@@ -17,7 +17,8 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
+from dataclasses import dataclass
 from functools import cache
 
 from .config import settings
@@ -136,9 +137,53 @@ STOPWORDS = {
 }
 
 
-def build_prompt(question: str, context: str) -> str:
+@dataclass(frozen=True)
+class Turn:
+    """One completed exchange, kept only to resolve references in the next question."""
+
+    user: str
+    assistant: str
+
+
+type History = Sequence[Turn]
+
+# Spoken follow-ups are short and referential ("and how much is that one?"), so the
+# model needs the previous exchange to know what "that one" is. The framing matters:
+# history is for resolving references only. Without that instruction the model treats
+# its own earlier answers as source material and will happily re-assert a fact that has
+# dropped out of the retrieved context, which is exactly the grounding failure the
+# whole retrieval layer exists to prevent.
+HISTORY_PREAMBLE = (
+    "Earlier turns in this conversation, most recent last. Use them ONLY to work out "
+    "what the question refers to (pronouns, 'that one', 'it'). They are not a source "
+    "of facts -- every fact in your answer must still come from the Context below."
+)
+
+
+def format_history(history: History | None, max_chars: int = 400) -> str:
+    """Render recent turns for the prompt, newest-biased and length-capped."""
+    if not history:
+        return ""
+    lines = []
+    for turn in history:
+        lines.append(f"User: {_clip(turn.user, max_chars)}")
+        lines.append(f"Assistant: {_clip(turn.assistant, max_chars)}")
+    return "\n".join(lines)
+
+
+def build_prompt(question: str, context: str, history: History | None = None) -> str:
     context_block = context.strip() or "(no relevant documents were retrieved)"
-    return f"{SYSTEM_PROMPT}\n\nContext:\n{context_block}\n\nQuestion: {question}\nSpoken answer:"
+    sections = [SYSTEM_PROMPT]
+    if past := format_history(history):
+        sections.append(f"{HISTORY_PREAMBLE}\n{past}")
+    sections.append(f"Context:\n{context_block}")
+    sections.append(f"Question: {question}\nSpoken answer:")
+    return "\n\n".join(sections)
+
+
+def _clip(text: str, limit: int) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[:limit] + "..."
 
 
 class ExtractiveBackend:
@@ -152,10 +197,13 @@ class ExtractiveBackend:
 
     name = "extractive"
 
-    def stream(self, question: str, context: str) -> Iterator[str]:
-        yield self.complete(question, context)
+    def stream(self, question: str, context: str, history: History | None = None):
+        yield self.complete(question, context, history)
 
-    def complete(self, question: str, context: str) -> str:
+    def complete(self, question: str, context: str, history: History | None = None) -> str:
+        # History is deliberately ignored. Resolving "that one" needs a language
+        # model; sentence ranking cannot do it, and splicing the previous question
+        # into the term set would just pull in stale keywords and mis-rank.
         if not context.strip():
             return NO_CONTEXT_REPLY
 
@@ -253,8 +301,8 @@ class GeminiBackend:
             thinking_config=types.ThinkingConfig(thinking_budget=settings.gemini_thinking_budget)
         )
 
-    def stream(self, question: str, context: str) -> Iterator[str]:
-        prompt = build_prompt(question, context)
+    def stream(self, question: str, context: str, history: History | None = None):
+        prompt = build_prompt(question, context, history)
         emitted = False
         try:
             for token in self._generate(prompt, self._config):
@@ -283,8 +331,8 @@ class GeminiBackend:
             if event.text:
                 yield event.text
 
-    def complete(self, question: str, context: str) -> str:
-        return "".join(self.stream(question, context)).strip()
+    def complete(self, question: str, context: str, history: History | None = None) -> str:
+        return "".join(self.stream(question, context, history)).strip()
 
 
 class OllamaBackend:
@@ -295,12 +343,12 @@ class OllamaBackend:
 
         self._client = httpx.Client(base_url=settings.ollama_host, timeout=120.0)
 
-    def stream(self, question: str, context: str) -> Iterator[str]:
+    def stream(self, question: str, context: str, history: History | None = None):
         import json
 
         payload = {
             "model": settings.ollama_model,
-            "prompt": build_prompt(question, context),
+            "prompt": build_prompt(question, context, history),
             "stream": True,
             "options": {"temperature": 0.2, "num_predict": settings.llm_max_words * 3},
         }
@@ -313,8 +361,8 @@ class OllamaBackend:
                 if chunk.get("response"):
                     yield chunk["response"]
 
-    def complete(self, question: str, context: str) -> str:
-        return "".join(self.stream(question, context)).strip()
+    def complete(self, question: str, context: str, history: History | None = None) -> str:
+        return "".join(self.stream(question, context, history)).strip()
 
 
 BACKENDS = {
@@ -340,10 +388,12 @@ def get_llm(backend: str | None = None):
         return ExtractiveBackend()
 
 
-def answer(question: str, context: str, backend: str | None = None) -> str:
+def answer(
+    question: str, context: str, backend: str | None = None, history: History | None = None
+) -> str:
     llm = get_llm(backend)
     try:
-        return speakable(llm.complete(question, context))
+        return speakable(llm.complete(question, context, history))
     except Exception as exc:
         if isinstance(llm, ExtractiveBackend):
             raise
@@ -351,7 +401,7 @@ def answer(question: str, context: str, backend: str | None = None) -> str:
         return speakable(ExtractiveBackend().complete(question, context))
 
 
-def _iter_tokens(llm, question: str, context: str) -> Iterator[str]:
+def _iter_tokens(llm, question: str, context: str, history: History | None = None) -> Iterator[str]:
     """Token stream with a per-turn safety net.
 
     Free-tier Gemini has a low requests-per-minute ceiling, so a 429 mid-conversation
@@ -365,7 +415,7 @@ def _iter_tokens(llm, question: str, context: str) -> Iterator[str]:
     """
     emitted = False
     try:
-        for token in llm.stream(question, context):
+        for token in llm.stream(question, context, history):
             emitted = True
             yield token
     except Exception as exc:
@@ -378,7 +428,9 @@ def _iter_tokens(llm, question: str, context: str) -> Iterator[str]:
         yield ExtractiveBackend().complete(question, context)
 
 
-def stream_sentences(question: str, context: str, backend: str | None = None) -> Iterator[str]:
+def stream_sentences(
+    question: str, context: str, backend: str | None = None, history: History | None = None
+) -> Iterator[str]:
     """Regroup the token stream into whole sentences.
 
     TTS quality collapses if you synthesize token fragments -- prosody is decided per
@@ -387,7 +439,7 @@ def stream_sentences(question: str, context: str, backend: str | None = None) ->
     natural, and they arrive fast enough to keep the latency win.
     """
     buffer = ""
-    for token in _iter_tokens(get_llm(backend), question, context):
+    for token in _iter_tokens(get_llm(backend), question, context, history):
         buffer += token
         while True:
             match = _SENTENCE_END.search(buffer)

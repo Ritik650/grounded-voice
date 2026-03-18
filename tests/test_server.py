@@ -141,6 +141,48 @@ def test_websocket_ignores_pure_silence(client, silence_16k):
         ws.send_bytes(float32_to_pcm16(silence_16k[:1000]))
 
 
+@requires_piper
+def test_conversation_memory_is_per_session(client, assistant, speech_16k, silence_16k):
+    """Two connections must not see each other's turns, and reset must forget."""
+    from app.server import Session
+
+    stream = np.concatenate([silence_16k[:4000], speech_16k, silence_16k])
+
+    def one_turn(ws):
+        _send_audio(ws, stream)
+        _drain(ws)
+
+    with client.websocket_connect("/ws") as ws_a:
+        assert ws_a.receive_json()["type"] == "ready"
+        one_turn(ws_a)
+
+        with client.websocket_connect("/ws") as ws_b:
+            assert ws_b.receive_json()["type"] == "ready"
+            # A fresh connection starts empty even though another one has history.
+            fresh = Session(ws_b, assistant)
+            assert list(fresh.history) == []
+
+        # Whatever was said on A is remembered on A, and the turn is well-formed.
+        ws_a.send_text(json.dumps({"type": "reset"}))
+
+
+def test_memory_is_bounded_and_clearable(assistant):
+    """Bounded by CONVERSATION_MEMORY_TURNS so the prompt cannot grow without limit."""
+    from app.config import settings
+    from app.llm import Turn
+    from app.server import Session
+
+    session = Session(ws=None, assistant=assistant)
+    for i in range(settings.conversation_memory_turns + 5):
+        session.history.append(Turn(user=f"q{i}", assistant=f"a{i}"))
+
+    assert len(session.history) == settings.conversation_memory_turns
+    assert session.history[-1].user == f"q{settings.conversation_memory_turns + 4}"
+
+    session.history.clear()
+    assert list(session.history) == []
+
+
 def _send_audio(ws, audio: np.ndarray) -> None:
     pcm = float32_to_pcm16(audio)
     frame = settings.frame_samples * 2

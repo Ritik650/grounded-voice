@@ -206,6 +206,9 @@ or `.env` (see [.env.example](.env.example)).
 | `ASR_MODEL_SIZE` | `base.en` | see the WER table |
 | `QDRANT_URL` | `:memory:` | or `http://localhost:6333` to persist |
 | `VAD_MIN_SILENCE_MS` | `600` | end-of-utterance hangover; raise if it cuts you off |
+| `GEMINI_MODEL` | `gemini-3.5-flash-lite` | see the Gemini notes below |
+| `GEMINI_THINKING_BUDGET` | `0` | 0 disables thinking (halves latency); -1 model default |
+| `CONVERSATION_MEMORY_TURNS` | `3` | follow-up context per session; 0 disables |
 | `TTS_LENGTH_SCALE` | `1.0` | `<1` speaks faster |
 
 ### The three LLM backends
@@ -257,6 +260,36 @@ assistant contradict itself mid-sentence.
 
 Budget roughly **+0.7–0.9 s** on top of the ~1 s local pipeline when using Gemini. The
 hosted call is then the largest single stage.
+
+### Conversation memory
+
+Spoken follow-ups are short and referential, so each turn carries the last
+`CONVERSATION_MEMORY_TURNS` exchanges (default 3) into the next prompt. Live, with
+`gemini-3.5-flash-lite`:
+
+| | *"tell me about the starter plan"* → *"how much is it"* |
+|---|---|
+| Memory on | "The Starter plan costs thirty dollars a month." |
+| Memory off | "I do not have that information." |
+
+Three properties worth knowing:
+
+- **Memory is per WebSocket session**, held on the `Session` object, never at module
+  scope — two simultaneous callers cannot see each other's turns. Closing the socket
+  forgets everything; so does the protocol's `{"type": "reset"}`.
+- **It is bounded** by a `deque(maxlen=N)`, so a long conversation cannot grow the
+  prompt without limit. Each stored turn is also length-capped.
+- **History is framed as reference-resolution only**, not as a source of facts.
+  Without that instruction the model starts treating its own earlier answers as
+  evidence and re-asserts facts that have since dropped out of the retrieved context —
+  which is precisely the grounding failure the retrieval layer exists to prevent.
+
+Known limitation: memory reaches the **LLM only**. Retrieval still runs on the raw
+utterance, so *"how much is it"* retrieves on those four words. It works above because
+the KB is small enough that the right chunk is still in the top-k; on a larger corpus
+the retrieval step would need the same treatment (query rewriting from history), which
+is not implemented here. The extractive backend ignores history entirely — resolving
+"it" needs a language model.
 
 ---
 

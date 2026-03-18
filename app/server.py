@@ -36,6 +36,7 @@ import contextlib
 import logging
 import threading
 import time
+from collections import deque
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
@@ -45,6 +46,7 @@ from fastapi.staticfiles import StaticFiles
 from .asr import StreamingTranscriber
 from .audio import load_audio, pcm16_to_float32, wav_bytes
 from .config import ROOT, settings
+from .llm import Turn
 from .metrics import Trace, format_table, registry
 from .pipeline import VoiceAssistant, get_assistant
 from .vad import EventType, UtteranceSegmenter
@@ -153,6 +155,11 @@ class Session:
         self.assistant = assistant
         self.segmenter = UtteranceSegmenter()
         self.partials = StreamingTranscriber(assistant.asr, initial_prompt=assistant.asr_prompt)
+
+        # Conversation memory lives on the session, never at module scope: two callers
+        # sharing one process must not see each other's turns. A bounded deque also
+        # means a long conversation cannot grow the prompt without limit.
+        self.history: deque[Turn] = deque(maxlen=max(0, settings.conversation_memory_turns))
 
         self._send_lock = asyncio.Lock()  # one writer at a time on the socket
         self._asr_lock = asyncio.Lock()  # the Whisper model is not re-entrant
@@ -276,6 +283,7 @@ class Session:
     async def respond(self, question: str, trace: Trace) -> None:
         self._cancel.clear()
         loop = asyncio.get_running_loop()
+        spoken: list[str] = []
 
         def produce() -> None:
             """Runs in the executor: pulls the pipeline generator, pushes to the socket.
@@ -286,10 +294,13 @@ class Session:
             started = False
             # The pipeline yields (sentence, None) once when a sentence is ready, then
             # (sentence, frame) for each of its audio frames.
-            for sentence, frame in self.assistant.stream_reply(question, trace):
+            for sentence, frame in self.assistant.stream_reply(
+                question, trace, history=list(self.history)
+            ):
                 if self._cancel.is_set():
                     break
                 if frame is None:
+                    spoken.append(sentence)
                     _block_on(loop, self._announce(sentence, started))
                     started = True
                 else:
@@ -308,6 +319,12 @@ class Session:
             log.exception("response failed")
             with contextlib.suppress(Exception):
                 await self.send_json({"type": "error", "message": "response failed"})
+        finally:
+            # Recorded even when barge-in cut the reply short: the user heard the part
+            # that was spoken, so a follow-up pronoun may well refer to it. Storing
+            # nothing would leave the next turn resolving against a gap.
+            if spoken and self.history.maxlen:
+                self.history.append(Turn(user=question, assistant=" ".join(spoken)))
 
     async def _announce(self, sentence: str, already_started: bool) -> None:
         await self.send_json({"type": "reply", "text": sentence})
@@ -352,9 +369,12 @@ class Session:
         await self.send_json({"type": "interrupt"})
 
     async def reset(self) -> None:
+        """Protocol-level clear: drop buffered audio, cancel the reply, forget the
+        conversation. Closing the socket does the same by discarding the Session."""
         await self.barge_in()
         self.segmenter = UtteranceSegmenter(vad=self.segmenter.vad)
         self.partials.reset()
+        self.history.clear()
 
     async def flush(self) -> None:
         for event in self.segmenter.flush():

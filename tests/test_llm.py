@@ -64,10 +64,10 @@ def test_stream_sentences_groups_tokens_into_sentences(monkeypatch):
     class FakeBackend:
         name = "fake"
 
-        def stream(self, question, context):
+        def stream(self, question, context, history=None):
             yield from ["The refund ", "window is 30 days. ", "Equipment ", "is extra."]
 
-        def complete(self, question, context):
+        def complete(self, question, context, history=None):
             return "".join(self.stream(question, context))
 
     monkeypatch.setitem(llm.BACKENDS, "fake", FakeBackend)
@@ -76,6 +76,70 @@ def test_stream_sentences_groups_tokens_into_sentences(monkeypatch):
     sentences = list(llm.stream_sentences("q", "ctx", backend="fake"))
     assert sentences == ["The refund window is 30 days.", "Equipment is extra."]
     llm.get_llm.cache_clear()
+
+
+class _PromptSpy:
+    """Captures the prompt a backend was handed, so we can assert on what the model
+    would actually see rather than on the answer it happened to produce."""
+
+    name = "spy"
+    last_prompt = ""
+
+    def stream(self, question, context, history=None):
+        type(self).last_prompt = llm.build_prompt(question, context, history)
+        yield "Eighty dollars a month."
+
+    def complete(self, question, context, history=None):
+        return "".join(self.stream(question, context, history))
+
+
+def test_followup_prompt_carries_the_previous_turn(monkeypatch):
+    """The core memory requirement: a pronoun follow-up must reach the model with the
+    turn that gives it a referent."""
+    monkeypatch.setitem(llm.BACKENDS, "spy", _PromptSpy)
+    llm.get_llm.cache_clear()
+
+    history = [llm.Turn(user="Tell me about the Gigabit plan", assistant="It is our fastest tier.")]
+    list(
+        llm.stream_sentences(
+            "and how much does that cost?", CONTEXT, backend="spy", history=history
+        )
+    )
+
+    prompt = _PromptSpy.last_prompt
+    assert "Tell me about the Gigabit plan" in prompt
+    assert "It is our fastest tier." in prompt
+    # The follow-up itself and the retrieved context must still be present.
+    assert "and how much does that cost?" in prompt
+    assert "eighty dollars" in prompt
+    # And history must be framed as reference-resolution only, not as fact source.
+    assert "not a source" in prompt
+    llm.get_llm.cache_clear()
+
+
+def test_prompt_has_no_history_section_when_memory_is_empty(monkeypatch):
+    monkeypatch.setitem(llm.BACKENDS, "spy", _PromptSpy)
+    llm.get_llm.cache_clear()
+
+    llm.answer("how much is the gigabit plan", CONTEXT, backend="spy", history=[])
+
+    assert llm.HISTORY_PREAMBLE not in _PromptSpy.last_prompt
+    llm.get_llm.cache_clear()
+
+
+def test_history_is_length_capped():
+    long_turn = llm.Turn(user="q " * 500, assistant="a " * 500)
+    rendered = llm.format_history([long_turn], max_chars=100)
+    assert len(rendered) < 300
+    assert rendered.endswith("...")
+
+
+def test_extractive_ignores_history_without_breaking():
+    history = [llm.Turn(user="something unrelated", assistant="entirely unrelated")]
+    reply = llm.answer(
+        "how much is the gigabit plan", CONTEXT, backend="extractive", history=history
+    )
+    assert "eighty dollars" in reply
 
 
 class _Boom:
@@ -87,12 +151,12 @@ class _Boom:
         self.code = code
         self.after_tokens = after_tokens
 
-    def stream(self, question, context):
+    def stream(self, question, context, history=None):
         for i in range(self.after_tokens):
             yield f"token{i} "
         raise RuntimeError(f"{self.code} RESOURCE_EXHAUSTED: quota exceeded")
 
-    def complete(self, question, context):
+    def complete(self, question, context, history=None):
         return "".join(self.stream(question, context))
 
 
@@ -112,7 +176,7 @@ def test_rate_limited_backend_falls_back_to_extractive(monkeypatch, caplog):
 
 def test_network_error_falls_back_to_extractive(monkeypatch):
     class Offline(_Boom):
-        def stream(self, question, context):
+        def stream(self, question, context, history=None):
             raise ConnectionError("getaddrinfo failed")
             yield  # pragma: no cover - generator marker
 

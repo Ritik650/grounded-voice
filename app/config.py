@@ -69,6 +69,13 @@ class Settings(BaseSettings):
     ollama_model: str = "llama3.2:1b"
     llm_max_words: int = 60  # long replies destroy perceived latency via TTS
 
+    # Turns of (question, answer) carried into the next prompt so follow-ups like
+    # "and how much does that cost?" have a referent. Kept small on purpose: every
+    # remembered turn is prompt tokens on the critical path of a live conversation,
+    # and voice follow-ups rarely reach back further than a couple of exchanges.
+    # 0 disables memory entirely.
+    conversation_memory_turns: int = 3
+
     # --- TTS -----------------------------------------------------------------
     tts_engine: str = "auto"  # auto | piper | null
     piper_voice: str = "en_US-lessac-medium"

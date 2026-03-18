@@ -108,12 +108,16 @@ class VoiceAssistant:
         with trace.stage("retrieval"):
             return self.kb.context_for(question)
 
-    def generate(self, question: str, context: str, trace: Trace) -> str:
+    def generate(
+        self, question: str, context: str, trace: Trace, history: llm.History | None = None
+    ) -> str:
         with trace.stage("llm"):
-            return llm.answer(question, context, backend=self.llm_backend)
+            return llm.answer(question, context, backend=self.llm_backend, history=history)
 
-    def generate_sentences(self, question: str, context: str) -> Iterator[str]:
-        return llm.stream_sentences(question, context, backend=self.llm_backend)
+    def generate_sentences(
+        self, question: str, context: str, history: llm.History | None = None
+    ) -> Iterator[str]:
+        return llm.stream_sentences(question, context, backend=self.llm_backend, history=history)
 
     # -- whole turns ----------------------------------------------------------
 
@@ -161,13 +165,20 @@ class VoiceAssistant:
         return result
 
     def stream_reply(
-        self, question: str, trace: Trace | None = None
+        self,
+        question: str,
+        trace: Trace | None = None,
+        history: llm.History | None = None,
     ) -> Iterator[tuple[str, AudioFrame | None]]:
         """M2: sentence-by-sentence generation, each sentence synthesized as it lands.
 
         Yields (sentence, frame) pairs -- sentence first with frame=None so the caller
         can display the text immediately, then its audio frames. The generator is the
         cancellation point for barge-in: the caller simply stops iterating.
+
+        `history` is supplied by the WebSocket session, so memory is per-connection.
+        Note that it reaches the LLM only: retrieval still runs on the raw utterance,
+        so a bare "and how much is that?" retrieves on those words alone.
         """
         trace = trace or Trace(label="stream_turn")
         with trace.stage("retrieval"):
@@ -178,7 +189,7 @@ class VoiceAssistant:
         # and playback, so it never reaches the user as latency.
         llm_start = time.perf_counter()
         try:
-            for sentence in self.generate_sentences(question, context):
+            for sentence in self.generate_sentences(question, context, history):
                 trace.stages.setdefault("llm", (time.perf_counter() - llm_start) * 1000)
                 yield sentence, None
                 with trace.stage("tts_total"):
