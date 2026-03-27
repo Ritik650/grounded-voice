@@ -1,0 +1,36 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    healthcheck:
+      # Qdrant's image has no curl or wget, but it does have bash, so use a raw
+      # /dev/tcp probe rather than adding a package just to health-check it.
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/6333' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    environment:
+      # Persistent Qdrant instead of the in-process default, so the KB survives
+      # restarts and can be shared by other services.
+      QDRANT_URL: http://qdrant:6333
+      LLM_BACKEND: ${LLM_BACKEND:-extractive}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      ASR_MODEL_SIZE: ${ASR_MODEL_SIZE:-base.en}
+    volumes:
+      # Edit the knowledge base without rebuilding the image.
+      - ./data/kb:/app/data/kb:ro
+    restart: unless-stopped
+
+volumes:
+  qdrant_storage:

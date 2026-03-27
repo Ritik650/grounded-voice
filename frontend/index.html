@@ -1,0 +1,490 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Voice Assistant</title>
+<style>
+  /* Design tokens from the "Synthetic Intelligence Console" system.
+     Fonts are referenced but never fetched: the whole stack runs offline, and a
+     blocking webfont request would be the only thing in the page that needs a
+     network. Local JetBrains Mono is used when present, else the system mono. */
+  :root {
+    --bg: #050505;
+    --panel: #121212;
+    --raised: #1a1a1a;
+    --border: #2a3a3a;
+    --accent: #00f5ff;
+    --text: #e5e2e1;
+    --muted: #7c8a8a;
+    --error: #ff4d4d;
+    --warn: #ffb86c;
+    --mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+    --sans: "Hanken Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text); font-family: var(--sans);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+
+  /* ---- header ---- */
+  header {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding: 12px 24px; border-bottom: 1px solid var(--border); background: var(--panel);
+  }
+  .title { font-family: var(--mono); font-size: 18px; font-weight: 600; letter-spacing: .05em; }
+  .subtitle { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .pills { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .pill {
+    font-family: var(--mono); font-size: 10px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .05em; color: var(--muted); border: 1px solid var(--border);
+    padding: 4px 8px; display: flex; align-items: center; gap: 6px; white-space: nowrap;
+  }
+  .pill b { color: var(--text); font-weight: 600; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
+  .dot.live { background: var(--accent); box-shadow: 0 0 4px var(--accent); }
+  .dot.err  { background: var(--error); }
+
+  /* ---- mic stage ---- */
+  .stage {
+    display: flex; align-items: center; justify-content: center; gap: 24px;
+    padding: 20px; border-bottom: 1px solid var(--border);
+  }
+  .mic-wrap { position: relative; width: 120px; height: 120px; }
+  .ring {
+    position: absolute; inset: 0; border-radius: 50%; border: 1px solid var(--border);
+    /* Scaled by the live mic level; transform-only so it never triggers layout. */
+    transform: scale(1); transition: transform 80ms linear, border-color 200ms;
+    pointer-events: none;
+  }
+  .ring.active { border-color: var(--accent); }
+  button.mic {
+    position: absolute; inset: 12px; border-radius: 50%; cursor: pointer;
+    background: transparent; border: 1px solid var(--accent); color: var(--accent);
+    font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: .08em;
+    text-transform: uppercase; transition: background 150ms, color 150ms;
+  }
+  button.mic:hover { background: rgba(0, 245, 255, .08); }
+  button.mic.recording { background: var(--accent); color: #050505; }
+  .stage-side { display: flex; flex-direction: column; gap: 8px; min-width: 150px; }
+  .status { font-family: var(--mono); font-size: 12px; color: var(--muted); min-height: 16px; }
+  button.ghost {
+    background: transparent; border: 1px solid var(--border); color: var(--muted);
+    font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+    padding: 8px 12px; cursor: pointer;
+  }
+  button.ghost:hover:not(:disabled) { color: var(--text); border-color: var(--text); }
+  button.ghost:disabled { opacity: .35; cursor: not-allowed; }
+
+  /* ---- transcript ---- */
+  #log { flex: 1; overflow-y: auto; padding: 16px 24px; display: flex; flex-direction: column; gap: 12px; }
+  .row { display: flex; }
+  .row.user { justify-content: flex-end; }
+  .bubble { max-width: 68%; padding: 10px 14px; border-radius: 1rem; font-size: 14px; line-height: 20px; }
+  .user .bubble { background: var(--raised); border: 1px solid var(--border); }
+  .bot  .bubble { background: transparent; border: 1px solid var(--accent); color: #d6feff; }
+  .partial .bubble { border-style: dashed; color: var(--muted); font-style: italic; }
+  .caret { display: inline-block; width: 7px; height: 14px; background: var(--accent);
+           vertical-align: -2px; margin-left: 3px; animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .sources { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  .chip { font-family: var(--mono); font-size: 10px; color: var(--muted);
+          border: 1px solid var(--border); padding: 2px 6px; }
+  .note { align-self: center; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .note.error { color: var(--error); }
+
+  /* ---- speaking indicator ---- */
+  #speaking {
+    display: none; align-items: center; gap: 10px; padding: 8px 24px;
+    border-top: 1px solid var(--border); font-family: var(--mono); font-size: 11px;
+    color: var(--accent); text-transform: uppercase; letter-spacing: .05em;
+  }
+  #speaking.on { display: flex; }
+  .bars { display: flex; gap: 2px; align-items: flex-end; height: 14px; }
+  .bars i { width: 3px; background: var(--accent); animation: eq .9s ease-in-out infinite; }
+  .bars i:nth-child(2) { animation-delay: .15s; }
+  .bars i:nth-child(3) { animation-delay: .3s; }
+  @keyframes eq { 0%,100% { height: 4px; } 50% { height: 14px; } }
+
+  /* ---- metrics ---- */
+  .metrics { display: grid; grid-template-columns: repeat(5, 1fr); border-top: 1px solid var(--border); }
+  .cell { padding: 10px 16px; border-right: 1px solid var(--border); background: var(--panel); }
+  .cell:last-child { border-right: none; }
+  .cell .label { font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: .05em;
+                 text-transform: uppercase; color: var(--muted); }
+  .cell .value { font-family: var(--mono); font-size: 24px; font-weight: 700; line-height: 32px; }
+  .cell.total .value { color: var(--accent); }
+
+  @media (max-width: 720px) {
+    .metrics { grid-template-columns: repeat(2, 1fr); }
+    .stage { flex-direction: column; }
+    .bubble { max-width: 88%; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <div class="title">Voice Assistant</div>
+    <div class="subtitle">streaming ASR &rarr; grounded LLM &rarr; TTS</div>
+  </div>
+  <div class="pills">
+    <span class="pill">ASR <b id="p-asr">-</b></span>
+    <span class="pill">LLM <b id="p-llm">-</b></span>
+    <span class="pill">KB <b id="p-kb">-</b></span>
+    <span class="pill"><i class="dot" id="p-dot"></i><b id="p-conn">disconnected</b></span>
+  </div>
+</header>
+
+<div class="stage">
+  <div class="mic-wrap">
+    <div class="ring" id="ring"></div>
+    <button class="mic" id="mic">Start</button>
+  </div>
+  <div class="stage-side">
+    <div class="status" id="status">Click to start talking</div>
+    <button class="ghost" id="interrupt" disabled>Interrupt</button>
+    <button class="ghost" id="reset" disabled>Reset</button>
+  </div>
+</div>
+
+<div id="log"></div>
+
+<div id="speaking"><span class="bars"><i></i><i></i><i></i></span> speaking &mdash; say anything to interrupt</div>
+
+<div class="metrics">
+  <div class="cell"><div class="label">ASR</div><div class="value" id="m-asr">-</div></div>
+  <div class="cell"><div class="label">Retrieval</div><div class="value" id="m-ret">-</div></div>
+  <div class="cell"><div class="label">LLM</div><div class="value" id="m-llm">-</div></div>
+  <div class="cell"><div class="label">TTS first</div><div class="value" id="m-tts">-</div></div>
+  <div class="cell total"><div class="label">First audio</div><div class="value" id="m-e2e">-</div></div>
+</div>
+
+<script>
+"use strict";
+
+// The worklet runs on the audio thread. It only reframes and converts: anything
+// heavier here causes dropouts, because a missed deadline is a glitch, not a delay.
+const WORKLET = `
+class PCMCapture extends AudioWorkletProcessor {
+  constructor(options) {
+    super();
+    this.frame = options.processorOptions.frameSamples;
+    this.buffer = new Float32Array(this.frame);
+    this.filled = 0;
+  }
+  process(inputs) {
+    const input = inputs[0];
+    if (!input || !input[0]) return true;
+    const channel = input[0];
+    for (let i = 0; i < channel.length; i++) {
+      this.buffer[this.filled++] = channel[i];
+      if (this.filled === this.frame) {
+        const pcm = new Int16Array(this.frame);
+        for (let j = 0; j < this.frame; j++) {
+          const s = Math.max(-1, Math.min(1, this.buffer[j]));
+          pcm[j] = s * 32767;
+        }
+        this.port.postMessage(pcm.buffer, [pcm.buffer]);
+        this.filled = 0;
+      }
+    }
+    return true;
+  }
+}
+registerProcessor('pcm-capture', PCMCapture);
+`;
+
+const $ = (id) => document.getElementById(id);
+const els = {
+  mic: $("mic"), ring: $("ring"), status: $("status"), log: $("log"),
+  speaking: $("speaking"), interrupt: $("interrupt"), reset: $("reset"),
+  conn: $("p-conn"), dot: $("p-dot"), asr: $("p-asr"), llm: $("p-llm"), kb: $("p-kb"),
+};
+
+const state = {
+  ws: null, micCtx: null, playCtx: null, stream: null, worklet: null, analyser: null,
+  recording: false, sampleRate: 16000, ttsRate: 22050,
+  nextPlayAt: 0, sources: [], partialEl: null, botEl: null, raf: null,
+};
+
+// ---------- transcript ----------
+
+function addRow(kind, text) {
+  const row = document.createElement("div");
+  row.className = "row " + kind;
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+  bubble.textContent = text;
+  row.appendChild(bubble);
+  els.log.appendChild(row);
+  els.log.scrollTop = els.log.scrollHeight;
+  return row;
+}
+
+function note(text, isError) {
+  const el = document.createElement("div");
+  el.className = "note" + (isError ? " error" : "");
+  el.textContent = text;
+  els.log.appendChild(el);
+  els.log.scrollTop = els.log.scrollHeight;
+}
+
+function showPartial(text) {
+  if (!state.partialEl) {
+    state.partialEl = addRow("user partial", "");
+    state.partialEl.querySelector(".bubble").appendChild(document.createElement("span"));
+    state.partialEl.querySelector(".bubble").appendChild(
+      Object.assign(document.createElement("span"), { className: "caret" }));
+  }
+  state.partialEl.querySelector(".bubble > span").textContent = text;
+  els.log.scrollTop = els.log.scrollHeight;
+}
+
+function clearPartial() {
+  if (state.partialEl) { state.partialEl.remove(); state.partialEl = null; }
+}
+
+function addSources(row, sources) {
+  if (!sources || !sources.length) return;
+  const wrap = document.createElement("div");
+  wrap.className = "sources";
+  for (const s of sources) {
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    chip.textContent = s;
+    wrap.appendChild(chip);
+  }
+  row.querySelector(".bubble").appendChild(wrap);
+}
+
+// ---------- playback ----------
+
+function playChunk(arrayBuffer) {
+  const pcm = new Int16Array(arrayBuffer);
+  const buffer = state.playCtx.createBuffer(1, pcm.length, state.ttsRate);
+  const channel = buffer.getChannelData(0);
+  for (let i = 0; i < pcm.length; i++) channel[i] = pcm[i] / 32768;
+
+  const source = state.playCtx.createBufferSource();
+  source.buffer = buffer;
+  source.connect(state.playCtx.destination);
+
+  // Chunks arrive far faster than real time, so they are scheduled back to back on
+  // the audio clock rather than played on arrival. A small lead-in absorbs jitter
+  // without being audible as delay.
+  const now = state.playCtx.currentTime;
+  const startAt = Math.max(now + 0.02, state.nextPlayAt);
+  source.start(startAt);
+  state.nextPlayAt = startAt + buffer.duration;
+
+  state.sources.push(source);
+  source.onended = () => {
+    state.sources = state.sources.filter((s) => s !== source);
+    if (!state.sources.length) els.speaking.classList.remove("on");
+  };
+  els.speaking.classList.add("on");
+}
+
+function stopPlayback() {
+  // Barge-in: the server stops generating, but seconds of audio are already queued
+  // here. Only the client can silence those.
+  for (const source of state.sources) { try { source.stop(); } catch (e) { /* already ended */ } }
+  state.sources = [];
+  state.nextPlayAt = 0;
+  els.speaking.classList.remove("on");
+}
+
+// ---------- socket ----------
+
+function connect() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  const ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.binaryType = "arraybuffer";
+  state.ws = ws;
+
+  ws.onopen = () => {
+    els.conn.textContent = "connected";
+    els.dot.className = "dot live";
+  };
+  ws.onclose = () => {
+    els.conn.textContent = "disconnected";
+    els.dot.className = "dot";
+    stopRecording();
+  };
+  ws.onerror = () => {
+    els.conn.textContent = "error";
+    els.dot.className = "dot err";
+  };
+
+  ws.onmessage = (event) => {
+    if (event.data instanceof ArrayBuffer) { playChunk(event.data); return; }
+    const msg = JSON.parse(event.data);
+    switch (msg.type) {
+      case "ready":
+        state.sampleRate = msg.sample_rate;
+        state.ttsRate = msg.tts_sample_rate;
+        els.asr.textContent = msg.asr_model;
+        els.llm.textContent = msg.llm_backend;
+        break;
+      case "vad":
+        els.ring.classList.toggle("active", msg.state === "speech_start");
+        els.status.textContent = msg.state === "speech_start" ? "listening..." : "thinking...";
+        break;
+      case "partial":
+        showPartial(msg.text);
+        break;
+      case "final":
+        clearPartial();
+        addRow("user", msg.text);
+        state.botEl = null;
+        break;
+      case "reply":
+        // One reply message per sentence; append to the same bubble so a
+        // multi-sentence answer reads as one turn.
+        if (!state.botEl) state.botEl = addRow("bot", msg.text);
+        else state.botEl.querySelector(".bubble").textContent += " " + msg.text;
+        if (msg.sources) addSources(state.botEl, msg.sources);
+        break;
+      case "audio_start":
+        state.ttsRate = msg.sample_rate;
+        state.nextPlayAt = 0;
+        break;
+      case "audio_end":
+        els.status.textContent = state.recording ? "listening" : "idle";
+        break;
+      case "interrupt":
+        stopPlayback();
+        note("interrupted");
+        state.botEl = null;
+        break;
+      case "timings":
+        setMetrics(msg);
+        break;
+      case "error":
+        note(msg.message || "server error", true);
+        break;
+    }
+  };
+}
+
+function setMetrics(t) {
+  const ms = (v) => (v === undefined ? "-" : Math.round(v) + " ms");
+  $("m-asr").textContent = ms(t.asr);
+  $("m-ret").textContent = ms(t.retrieval);
+  $("m-llm").textContent = ms(t.llm);
+  $("m-tts").textContent = ms(t.tts_first_chunk);
+  $("m-e2e").textContent = ms(t.end_to_end_first_audio);
+}
+
+function send(obj) {
+  if (state.ws && state.ws.readyState === WebSocket.OPEN) state.ws.send(JSON.stringify(obj));
+}
+
+// ---------- microphone ----------
+
+async function startRecording() {
+  state.stream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      // Echo cancellation is load-bearing, not a nicety: without it the mic hears
+      // the assistant through the speakers, the VAD fires, and the assistant
+      // interrupts itself in a loop. Headphones are the other fix.
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+      channelCount: 1,
+    },
+  });
+
+  // Asking the context for 16 kHz makes the browser do the resampling in native
+  // code; doing it in JS would be both slower and worse.
+  state.micCtx = new AudioContext({ sampleRate: state.sampleRate });
+  const blob = new Blob([WORKLET], { type: "application/javascript" });
+  await state.micCtx.audioWorklet.addModule(URL.createObjectURL(blob));
+
+  const source = state.micCtx.createMediaStreamSource(state.stream);
+  state.worklet = new AudioWorkletNode(state.micCtx, "pcm-capture", {
+    numberOfInputs: 1, numberOfOutputs: 0,
+    processorOptions: { frameSamples: Math.round(state.sampleRate * 0.032) },
+  });
+  state.worklet.port.onmessage = (e) => {
+    if (state.ws && state.ws.readyState === WebSocket.OPEN) state.ws.send(e.data);
+  };
+
+  state.analyser = state.micCtx.createAnalyser();
+  state.analyser.fftSize = 512;
+  source.connect(state.analyser);
+  source.connect(state.worklet);
+
+  state.playCtx = state.playCtx || new AudioContext();
+  if (state.playCtx.state === "suspended") await state.playCtx.resume();
+
+  state.recording = true;
+  els.mic.textContent = "Stop";
+  els.mic.classList.add("recording");
+  els.status.textContent = "listening";
+  els.interrupt.disabled = false;
+  els.reset.disabled = false;
+  meter();
+}
+
+function meter() {
+  const data = new Uint8Array(state.analyser.frequencyBinCount);
+  const tick = () => {
+    if (!state.recording) return;
+    state.analyser.getByteTimeDomainData(data);
+    let peak = 0;
+    for (let i = 0; i < data.length; i++) peak = Math.max(peak, Math.abs(data[i] - 128));
+    els.ring.style.transform = `scale(${1 + Math.min(peak / 128, 1) * 0.35})`;
+    state.raf = requestAnimationFrame(tick);
+  };
+  tick();
+}
+
+function stopRecording() {
+  state.recording = false;
+  if (state.raf) cancelAnimationFrame(state.raf);
+  if (state.stream) state.stream.getTracks().forEach((t) => t.stop());
+  if (state.micCtx) state.micCtx.close();
+  state.stream = state.micCtx = state.worklet = state.analyser = null;
+  els.ring.style.transform = "scale(1)";
+  els.ring.classList.remove("active");
+  els.mic.textContent = "Start";
+  els.mic.classList.remove("recording");
+  els.status.textContent = "Click to start talking";
+  els.interrupt.disabled = true;
+  els.reset.disabled = true;
+}
+
+els.mic.onclick = async () => {
+  if (state.recording) { send({ type: "flush" }); stopRecording(); return; }
+  try {
+    if (!state.ws || state.ws.readyState !== WebSocket.OPEN) connect();
+    await startRecording();
+  } catch (err) {
+    note("microphone unavailable: " + err.message, true);
+  }
+};
+
+els.interrupt.onclick = () => { stopPlayback(); send({ type: "reset" }); };
+els.reset.onclick = () => {
+  stopPlayback();
+  send({ type: "reset" });
+  els.log.innerHTML = "";
+  state.partialEl = state.botEl = null;
+};
+
+// Fetch the KB size for the header pill; also a cheap check that the API is up.
+fetch("/health").then((r) => r.json()).then((h) => {
+  els.kb.textContent = h.kb_chunks + " chunks";
+  els.asr.textContent = h.asr_model;
+  els.llm.textContent = h.llm_backend;
+}).catch(() => { els.kb.textContent = "unavailable"; });
+
+connect();
+</script>
+</body>
+</html>
