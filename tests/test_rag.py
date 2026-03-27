@@ -47,3 +47,42 @@ def test_context_block_is_numbered_and_attributed(kb):
 
 def test_vocabulary_hint_surfaces_proper_nouns(kb):
     assert "Gigabit" in kb.vocabulary_hint()
+
+
+def test_debug_retrieval_logs_transcript_and_scores(kb, caplog, monkeypatch):
+    """The diagnostic must show what was heard and what came back, with scores."""
+    from app.config import settings
+    from app.pipeline import log_retrieval
+
+    monkeypatch.setattr(settings, "debug_retrieval", True)
+    chunks = kb.retrieve("how much is the gigabit plan", k=2)
+
+    with caplog.at_level("INFO", logger="app.pipeline"):
+        log_retrieval("how much is the gigabit plan", chunks)
+
+    assert "how much is the gigabit plan" in caplog.text
+    assert "rrf=" in caplog.text
+    assert "test.md" in caplog.text
+
+
+def test_debug_retrieval_is_silent_when_disabled(kb, caplog, monkeypatch):
+    from app.config import settings
+    from app.pipeline import log_retrieval
+
+    monkeypatch.setattr(settings, "debug_retrieval", False)
+    with caplog.at_level("INFO", logger="app.pipeline"):
+        log_retrieval("anything", kb.retrieve("gigabit", k=1))
+
+    assert "[retrieval]" not in caplog.text
+
+
+def test_debug_retrieval_reports_an_empty_result(caplog, monkeypatch):
+    """An empty retrieval is the most important case to see, not the least."""
+    from app.config import settings
+    from app.pipeline import log_retrieval
+
+    monkeypatch.setattr(settings, "debug_retrieval", True)
+    with caplog.at_level("INFO", logger="app.pipeline"):
+        log_retrieval("something unindexed", [])
+
+    assert "nothing retrieved" in caplog.text

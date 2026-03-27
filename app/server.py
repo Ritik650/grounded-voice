@@ -55,8 +55,28 @@ log = logging.getLogger(__name__)
 FRONTEND_DIR = ROOT / "frontend"
 
 
+def configure_app_logging() -> None:
+    """Make the app package's own log records visible under uvicorn.
+
+    Uvicorn configures the `uvicorn.*` loggers and nothing else, so records from
+    `app.*` propagate to a root logger with no handler and are dropped by the
+    lastResort handler, which only passes WARNING and above. Everything this project
+    logs at INFO -- DEBUG_RETRIEVAL dumps, warmup timings, the LLM fallback notices --
+    therefore vanished in exactly the deployment where they are wanted.
+    """
+    app_log = logging.getLogger(__package__ or "app")
+    if app_log.handlers:
+        return
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(levelname)-7s %(name)s: %(message)s"))
+    app_log.addHandler(handler)
+    app_log.setLevel(logging.INFO)
+    app_log.propagate = False
+
+
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
+    configure_app_logging()
     assistant = get_assistant()
     # Ingestion and warmup are seconds of blocking CPU; keep the event loop free so
     # health checks answer while the container is still coming up.

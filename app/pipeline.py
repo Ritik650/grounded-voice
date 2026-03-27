@@ -27,6 +27,29 @@ from .tts import TTS, AudioFrame
 log = logging.getLogger(__name__)
 
 
+def log_retrieval(question: str, chunks: list[Chunk], preview_chars: int = 140) -> None:
+    """Dump what retrieval actually returned for a query, when DEBUG_RETRIEVAL is set.
+
+    A wrong spoken answer has two very different causes that look identical from the
+    outside: the right passage was never retrieved, or it was retrieved and the model
+    ignored it. Printing the transcript alongside the ranked chunks and their fusion
+    scores separates the two in one glance -- and it starts from the transcript because
+    the third possibility is that ASR misheard the question in the first place.
+
+    Scores are Reciprocal Rank Fusion scores, not similarities: useful for comparing
+    candidates within one query, meaningless as an absolute threshold across queries.
+    """
+    if not settings.debug_retrieval:
+        return
+    lines = [f"[retrieval] transcript: {question!r}"]
+    if not chunks:
+        lines.append("  (nothing retrieved -- empty knowledge base or empty query)")
+    for i, chunk in enumerate(chunks, 1):
+        preview = " ".join(chunk.text.split())[:preview_chars]
+        lines.append(f"  {i}. rrf={chunk.score:.4f}  {chunk.source}  {preview}")
+    log.info("\n".join(lines))
+
+
 @dataclass
 class TurnResult:
     transcript: str
@@ -106,7 +129,9 @@ class VoiceAssistant:
 
     def retrieve(self, question: str, trace: Trace) -> tuple[str, list[Chunk]]:
         with trace.stage("retrieval"):
-            return self.kb.context_for(question)
+            context, chunks = self.kb.context_for(question)
+        log_retrieval(question, chunks)
+        return context, chunks
 
     def generate(
         self, question: str, context: str, trace: Trace, history: llm.History | None = None
@@ -182,7 +207,8 @@ class VoiceAssistant:
         """
         trace = trace or Trace(label="stream_turn")
         with trace.stage("retrieval"):
-            context, _ = self.kb.context_for(question)
+            context, chunks = self.kb.context_for(question)
+        log_retrieval(question, chunks)
 
         # For a streaming turn the useful LLM number is time-to-first-sentence, not
         # total generation time: everything after the first sentence overlaps with TTS

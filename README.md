@@ -209,6 +209,31 @@ or `.env` (see [.env.example](.env.example)).
 | `GEMINI_MODEL` | `gemini-3.5-flash-lite` | see the Gemini notes below |
 | `GEMINI_THINKING_BUDGET` | `0` | 0 disables thinking (halves latency); -1 model default |
 | `CONVERSATION_MEMORY_TURNS` | `3` | follow-up context per session; 0 disables |
+| `DEBUG_RETRIEVAL` | `false` | log transcript + retrieved chunks per query |
+
+### Diagnosing a wrong answer
+
+A wrong spoken answer has three causes that are indistinguishable from the outside:
+ASR misheard the question, retrieval missed the passage, or the model ignored a passage
+it was given. `DEBUG_RETRIEVAL=true` prints all three inputs per turn:
+
+```
+[retrieval] transcript: 'my router light is blinking amber'
+  1. rrf=1.0000  troubleshooting.md  ## No connection at all First, check whether the router...
+  2. rrf=0.5833  troubleshooting.md  Faults can be reported in the account portal or by calling...
+  3. rrf=0.5333  troubleshooting.md  Run a speed test from a device connected by ethernet cable...
+```
+
+Read it top down. If the transcript is wrong, it is an ASR problem — try
+`ASR_MODEL_SIZE=small.en`. If the transcript is right but the passage you expected is
+absent, it is retrieval — check chunking and the KB wording. If the right passage is
+sitting at rank 1 and the answer still ignored it, it is generation — switch backend or
+adjust the prompt.
+
+Scores are Reciprocal Rank Fusion scores, not similarities: comparable *within* a query,
+meaningless as an absolute threshold across queries. A query the KB cannot answer shows
+up as a flat, low spread (the out-of-domain "what is the capital of France" tops out at
+0.5000 here) rather than as a zero.
 | `TTS_LENGTH_SCALE` | `1.0` | `<1` speaks faster |
 
 ### The three LLM backends

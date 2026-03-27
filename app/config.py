@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     chunk_chars: int = 700
     chunk_overlap: int = 120
 
+    # Logs the transcript and the retrieved chunks with scores for every query, so a
+    # wrong answer can be attributed to retrieval or to generation without guessing.
+    # Off by default: it is per-turn output on a latency-sensitive path.
+    debug_retrieval: bool = False
+
     # --- LLM -----------------------------------------------------------------
     # "extractive" needs no API key and no network -- it is the default so the
     # pipeline, the tests and CI all run out of the box.
