@@ -1,0 +1,36 @@
+<svg viewBox="0 0 900 220" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgFill" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0b1220"/>
+      <stop offset="100%" stop-color="#0c2233"/>
+    </linearGradient>
+    <linearGradient id="hexFill2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#111827"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="900" height="220" rx="20" fill="url(#bgFill)"/>
+
+  <g transform="translate(0,0)">
+    <polygon points="190,110 150,179.3 70,179.3 30,110 70,40.7 150,40.7"
+             fill="url(#hexFill2)" stroke="#334155" stroke-width="3"/>
+    <circle cx="98" cy="96" r="30" fill="#0EA5E9" fill-opacity="0.75"/>
+    <circle cx="122" cy="96" r="30" fill="#8B5CF6" fill-opacity="0.75"/>
+    <circle cx="110" cy="128" r="30" fill="#10B981" fill-opacity="0.75"/>
+    <line x1="98" y1="96" x2="122" y2="96" stroke="#e2e8f0" stroke-width="1.5" stroke-opacity="0.8"/>
+    <line x1="98" y1="96" x2="110" y2="128" stroke="#e2e8f0" stroke-width="1.5" stroke-opacity="0.8"/>
+    <line x1="122" y1="96" x2="110" y2="128" stroke="#e2e8f0" stroke-width="1.5" stroke-opacity="0.8"/>
+    <circle cx="98" cy="96" r="4" fill="#f8fafc"/>
+    <circle cx="122" cy="96" r="4" fill="#f8fafc"/>
+    <circle cx="110" cy="128" r="4" fill="#f8fafc"/>
+    <path d="M30,55 V40.7 H45" fill="none" stroke="#10B981" stroke-width="3" stroke-linecap="round"/>
+    <path d="M175,165 V179.3 H160" fill="none" stroke="#10B981" stroke-width="3" stroke-linecap="round"/>
+  </g>
+
+  <text x="235" y="78" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="28" font-weight="700" fill="#f8fafc">Real-Time Voice Assistant</text>
+  <text x="237" y="105" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="16" fill="#7dd3fc">with Domain Grounding &#8212; runs entirely offline on CPU</text>
+  <text x="237" y="134" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="14" fill="#6ee7b7">981 ms end-of-speech &#8594; first audio &#183; 3.30% WER (base.en)</text>
+  <text x="237" y="160" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="13" fill="#64748b">Whisper &#183; Silero VAD &#183; Piper TTS &#183; Hybrid RRF Retrieval</text>
+  <text x="237" y="182" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="13" fill="#64748b">56 tests &#183; CI &#183; Docker &#183; Torch-free</text>
+</svg>
